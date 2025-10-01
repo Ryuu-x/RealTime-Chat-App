@@ -1,0 +1,19 @@
+# Node modules
+node_modules/
+client/node_modules/
+server/node_modules/
+
+# Environment variables
+.env
+
+# Logs
+*.log
+
+# Build folders (if any)
+client/build/
+client/README.md
+client/node_modules
+
+server/env
+server/node_modules
+
