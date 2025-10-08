@@ -1,6 +1,9 @@
 import User from "../models/user.model.js";
 import Message from "../models/message.model.js";
 import cloudinary from "../lib/cloudinary.js";
+import mongoose from "mongoose";
+import { getReceiverSocketId, io } from './../lib/socket.js';
+import streamifier from "streamifier"
 
 export const getUsersForSidebar = async (req, res) => {
     try {
@@ -42,7 +45,7 @@ export const sendMessages = async (req, res) => {
     const senderId = req.user._id;
 
     // Validation
-    if (!text && !image) {
+    if (!text && !req.file) {
       return res.status(400).json({ message: "Message text or image is required" });
     }
     if (!mongoose.Types.ObjectId.isValid(receiverId)) {
@@ -51,12 +54,38 @@ export const sendMessages = async (req, res) => {
 
     // Upload image if provided
     let imageUrl;
-    if (image) {
+    if (req.file) {
+      // upload buffer to cloudinary via stream
+      const uploadStream = cloudinary.uploader.upload_stream(
+        { folder: "chat_images" }, // optional
+        (error, result) => {
+          if (error) {
+            console.error("Cloudinary upload error (callback):", error);
+            return res.status(500).json({ message: "Image upload failed" });
+          }
+          // result.secure_url will be available here — but we need to continue flow;
+          // we'll handle message saving in the promise wrapper below.
+        }
+      );
+
+      // Create promise wrapper since upload_stream uses callback
+      const streamUpload = () =>
+        new Promise((resolve, reject) => {
+          const stream = cloudinary.uploader.upload_stream(
+            { folder: "chat_images" },
+            (error, result) => {
+              if (result) resolve(result);
+              else reject(error);
+            }
+          );
+          streamifier.createReadStream(req.file.buffer).pipe(stream);
+        });
+
       try {
-        const uploadResponse = await cloudinary.uploader.upload(image);
+        const uploadResponse = await streamUpload();
         imageUrl = uploadResponse.secure_url;
       } catch (uploadError) {
-        console.error("Cloudinary upload error:", uploadError.message);
+        console.error("Cloudinary upload error:", uploadError);
         return res.status(500).json({ message: "Image upload failed" });
       }
     }
@@ -70,6 +99,11 @@ export const sendMessages = async (req, res) => {
     });
 
     await newMessage.save();
+
+    const receiverSocketId = getReceiverSocketId(receiverId);
+    if (receiverSocketId) {
+      io.to(receiverSocketId).emit("newMessage", newMessage);
+    }
 
     // Optionally populate sender details
     const populatedMessage = await newMessage.populate("senderId", "fullName profilePic");
